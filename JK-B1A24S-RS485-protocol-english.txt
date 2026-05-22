@@ -1,0 +1,803 @@
+JK-DZ11-B2A24S balancer communication protocol V1.3
+1. Overview
+This agreement restricts the JK-DZ11-B2A24S balancer board's external communication
+electrical interface, data format, communication rate and other content.
+2. Communication parameters
+The communication parameter agreement is shown in Table 1
+Table 1
+Communication Interface
+Baud rate
+
+RS485
+9600
+
+3. Communication format
+The system uses the master-slave response method for communication and transmission.
+During communication, the balancer is the slave and the control device is the master. All
+communication can only be initiated by the host, and the slave performs the corresponding
+operation after receiving the command, and returns the result to the host within 1S. If the complete
+response data frame from the slave is not received for more than 1S, it indicates that the data
+delivery failed. After the host sends a frame of data, it must wait for the slave to send back data or
+time out before sending the next command.
+The communication content is identified by sixteen, and the transmission unit is "frame". It is
+stipulated that the data transmission from the master to the slave is issued, and the data transmission
+from the slave to the master is upload.
+4.3 Frame format sent by the host
+In the frame sent by the host, a frame of data includes 5 data areas such as the frame header,
+slave address, command code, frame data, and checksum. The frame format is shown in Table 2.
+Frame header
+2Byte
+
+Table 2 Send frame format
+Slave address
+Command code
+1Byte
+1Byte
+
+Frame data
+2Byte
+
+Checksum
+1Byte
+
+among them:
+"Frame header" means the beginning of a frame of data, the length is 2 Bytes, and it is fixed at
+0x55 0xAA;
+"Slave address" means the number of the slave operated by this instruction, the length is 1
+Byte;
+"Command" indicates the operation content of the frame;
+"Frame data" means the data carried in the frame;
+"Check" adopts sum check, which is the accumulation of frame header to frame data;
+
+4.4 Upload frame format from the machine
+In the data frame uploaded by the slave, one frame of data contains 6 data areas such as frame
+header, slave address, command code, frame data, and checksum.
+
+Table 3 Upload frame format
+Frame header
+2Byte
+
+Slave address
+1Byte
+
+Command code
+1Byte
+
+Frame data
+69Byte
+
+Checksum
+1Byte
+
+among them:
+"Frame header" means the beginning of a frame of data, the length is 2 Bytes, and it is fixed as
+0xEB 0x90;
+"Slave address" means the number of the slave operated by this instruction, the length is 1
+Byte;
+"Command" indicates the content of the issued frame in response to the frame;
+"Frame data" means the data carried in the frame;
+"Check" adopts addition and check, which is the accumulation of frame header to frame data;
+4. Communication process
+The following takes the device address 0x01 as an example to describe the communication.
+4.1 Request balancer data
+1) Host sends data
+55 AA 01 FF 00 00 FF The data structure is shown in Table 4.
+Table 4
+Offset
+content
+0
+Frame header
+2
+Slave address
+3
+Command code
+4
+Frame data
+6
+Checksum
+2) balancer response
+
+type of data
+UINT8
+UINT8
+UINT8
+UINT16
+UINT8
+
+length
+2
+1
+1
+1
+1
+
+unit
+-
+
+Sample data
+0x55 0xAA
+0x01
+0xFF
+0x0000
+0xFF
+
+EB 90 01 FF 1E D3 0F 69 14 13 02 00 00 00 07 00 00 00 05 03 E8 01 14 0F 69 0F 69 0F 69 0F 69
+0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F 69 0F
+69 0F 69 0F 69 0F 69 0F 69 00 16 6F
+The data structure is shown in Table 5
+Table 5
+Offset
+0
+2
+3
+
+content
+Frame header
+Slave address
+Command code
+
+type of data length unit
+UINT8
+2
+UINT8
+1
+UINT8
+1
+-
+
+4
+
+Total battery voltage
+
+UINT16
+
+1
+
+10mV
+
+6
+
+1
+
+mV
+
+1
+
+string
+
+0x14 = 20 string
+
+9
+10
+
+Average cell voltage
+UINT16
+Identify the number of
+UINT8
+monomers
+Highest monomer
+UINT8
+Lowest monomer
+UINT8
+
+Sample data
+0xEB 0x90
+0x01
+0xFF
+0x1ED3*10mV=78.910
+V
+0x0F69 * 1mV= 3.995V
+
+1
+1
+
+-
+
+11
+
+Equilibrium
+
+1
+
+-
+
+0x13 = 19 string
+0x02 = 2 string
+BIT0 means balanced
+battery charging;
+BIT1 means balanced
+battery discharge;
+
+8
+
+UINT8
+
+12
+
+13
+15
+17
+19
+21
+22
+23
+25
+27
+29
+31
+33
+35
+37
+39
+41
+43
+45
+47
+49
+51
+53
+55
+57
+59
+61
+63
+65
+67
+69
+71
+73
+
+Alarm status
+
+Maximum
+voltage
+difference
+Balance current
+Balanced trigger voltage
+Maximum balance current
+Balance switch
+Set the number of
+monomers
+Voltage 0
+Voltage 1
+Voltage 2
+Voltage 3
+Voltage 4
+Voltage 5
+Voltage 6
+Voltage 7
+Voltage 8
+Voltage 9
+Voltage 10
+Voltage 11
+Voltage 12
+Voltage 13
+Voltage 14
+Voltage 15
+Voltage 16
+Voltage 17
+Voltage 18
+Voltage 19
+Voltage 20
+Voltage 21
+Voltage 22
+Voltage 23
+temperature
+Checksum
+
+UINT8
+
+1
+
+-
+
+The number of BIT0
+monomers
+is
+set
+incorrectly;
+BIT1 indicates that the
+wire resistance is too
+large;
+BIT2 means battery
+overvoltage;
+
+UINT16
+
+1
+
+mV
+
+0x0007 = 7mV
+
+UINT16
+UINT16
+UINT16
+UINT8
+
+1
+1
+1
+1
+
+mA
+mV
+mA
+-
+
+0x0000 = 0mA
+0x0005*1mV = 5mV
+0x03E8*1mA = 1000mA
+0x01 Balanced on
+
+UINT8
+
+1
+
+string
+
+0x14*1 string = 20 string
+
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+UINT16
+INT16
+UINT8
+
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+mV
+℃
+-
+
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0F69*1mV =3945mV
+0x0016*1℃=22℃
+0x6F
+
+4.2 Set the number of monomer strings
+1) Host sends data
+55 AA 01 F0 00 10 00
+
+The data structure is shown in Table 6
+
+Table 6
+Offset
+content
+type of data length unit
+Sample data
+0
+Frame header
+UINT8
+2
+0x55 0xAA
+2
+Slave address
+UINT8
+1
+0x01
+3
+Command code
+UINT8
+1
+0xF0
+4
+Frame data
+UINT16
+1
+string 0x0010 = 16 string
+6
+Checksum
+UINT8
+1
+0x00
+Note 1. The range of the number of monomers is 2-24. The balancer will not recognize the out-ofrange balancer and return to the internal parameters of the current balancer.
+2) balancer response
+EB 90 01 F0 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 7C
+The data structure is shown in Table 7
+Table 7
+Offset
+0
+2
+3
+4
+6-72
+73
+
+content
+Frame header
+Slave address
+Command code
+Set the number
+monomers
+Keep
+Checksum
+
+type of data length unit
+UINT8
+2
+UINT8
+1
+UINT8
+1
+of
+
+UINT16
+
+1
+
+string
+
+UINT8
+UINT8
+
+65
+1
+
+-
+
+Sample data
+0xEB 0x90
+0x01
+0xF0
+0x0010*1
+string=16
+string
+0x7C
+
+4.3 Set equalizing trigger voltage difference
+1) 1) Host sends data
+55 AA 01 F2 00 0A FC The data structure is shown in Table 8
+Table 8
+Offset
+content
+type of data length unit
+Sample data
+0
+Frame header
+UINT8
+2
+0x55 0xAA
+2
+Slave address
+UINT8
+1
+0x01
+3
+Command code
+UINT8
+1
+0xF2
+4
+Frame data
+UINT16
+1
+mV
+0x000A * 1mV = 10mV
+6
+Checksum
+UINT8
+1
+0xFC
+Note 1. The equalization trigger voltage difference range is 2-1000mV. Out of the range, the
+balancer will not recognize it and return to the current balancer internal parameters.
+2) balancer response
+EB 90 01 F2 00 0A 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 78
+The data structure is shown in Table 9
+Table 9
+Offset
+0
+2
+
+content
+Frame header
+Slave address
+
+type of data length unit
+UINT8
+2
+UINT8
+1
+-
+
+Sample data
+0xEB 0x90
+0x01
+
+3
+4
+6-72
+73
+
+Command code
+Balanced trigger voltage
+Keep
+Checksum
+
+UINT8
+UINT16
+UINT8
+UINT8
+
+1
+1
+65
+1
+
+mV
+-
+
+0xF2
+0x000A * 1mV =10mV
+0x78
+
+4.4 Set the maximum balance current
+1) Host sends data
+55 AA 01 F4 01 F4 E9
+
+The data structure is shown in Table 10
+Table 10
+
+Offset
+content
+type of data length unit
+Sample data
+0
+Frame header
+UINT8
+2
+0x55 0xAA
+2
+Slave address
+UINT8
+1
+0x01
+3
+Command code
+UINT8
+1
+0xF4
+4
+Frame data
+UINT16
+1
+mA
+0x01F4 * 1mA = 500mA
+6
+Checksum
+UINT8
+1
+0xE9
+Note 1. The maximum equalization current range is 30-1000mA. Out of the range, the balancer will
+not recognize it, and return to the current internal parameters of the balancer.
+2) balancer response
+EB 90 01 F4 01 F4 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 65
+The data structure is shown in Table 11
+Table 11
+Offset
+0
+2
+3
+4
+6-72
+73
+
+content
+Frame header
+Slave address
+Command code
+Maximum balance current
+Keep
+Checksum
+
+type of data length unit
+UINT8
+2
+UINT8
+1
+UINT8
+1
+UINT16
+1
+mA
+UINT8
+65
+UINT8
+1
+-
+
+Sample data
+0xEB 0x90
+0x01
+0xF4
+0x01F4 * 1mA = 500mA
+0x65
+
+4.5 Setting the balance switch
+1) Host sends data
+55 AA 01 F6 00 01 F7
+
+The data structure is shown in Table 12
+Table 12
+
+Offset
+content
+type of data length unit
+Sample data
+0
+Frame header
+UINT8
+2
+0x55 0xAA
+2
+Slave address
+UINT8
+1
+0x01
+3
+Command code
+UINT8
+1
+0xF6
+4
+Frame data
+UINT16
+1
+0x0001 Turn on balance
+6
+Checksum
+UINT8
+1
+0xF7
+Note 1. The setting range of the balancer switch is 0-1, 0 means to turn off the balancer; 1 means to
+turn on the balancer; the balancer will not recognize the out-of-range balancer and return to the
+current internal parameters of the balancer.
+
+2) balancer response
+EB 90 01 F6 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 73
+The data structure is shown in Table 13
+Table 13
+Offset
+0
+2
+3
+4
+6-72
+73
+
+content
+Frame header
+Slave address
+Command code
+Balance switch
+Keep
+Checksum
+
+type of data
+UINT8
+UINT8
+UINT8
+UINT16
+UINT8
+UINT8
+
+length
+2
+1
+1
+1
+65
+1
+
+unit
+-
+
+__________________________
+
+Sample data
+0xEB 0x90
+0x01
+0xF6
+0x0001 Balanced on
+0x73
+
+

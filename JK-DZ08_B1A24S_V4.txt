@@ -1,0 +1,449 @@
+JK-DZ08-B1A24S Equalizer communication protocol
+1. Outline
+
+This Agreement constrains JK-DZ08-B1A24S Equalizer electrical interface board for external communication, a data format
+
+Content type, communication speed and the like.
+
+2. Communication parameters
+
+Communication Interface CAN
+
+500Kbps
+
+Baud Rate
+
+3. CAN Bus data format
+Used only in the communication process CAN Standard bus frame, unused frame extended by CAN bus
+The arbitration field ID To restrict the content of the entire communication frame.
+
+CAN Bus arbitration field extended frame ID Altogether 11Bit . Stipulated in the agreement high 7 Bits are all 0 ,low 4 Place
+
+Used to indicate the device address.
+
+Arbitration field ( ARBITRATION FIELD)
+
+BIT10: 4
+
+BIT3: 0
+
+0
+
+Equalizer address Address
+
+4. Communication flow
+
+By way of the entire communication performed from the master, the main host device, the equalizer from the device. All through
+
+Letter can only be initiated by the master device, slave devices respond. Define a first data word of each frame in the communication process
+
+Section indicating the data type, all data frames are endian, the low byte.
+Below the device address 0x01 For example, to communicate explained.
+
+4.1 Equalizer data request
+
+1) The host sends data
+
+Addr
+0x01
+
+Data Field
+
+1
+
+2-8
+
+0xFF
+
+-
+
+2) EQ response
+Data Field
+
+Addr
+
+1
+
+2
+
+3
+temperature
+
+0x01
+
+0x01
+
+0x01
+
+0x02 highest
+
+0x01
+
+0x03 Balance trigger pressure
+
+Balanced
+
+body
+
+monomer
+
+N
+
+7
+
+8
+
+The average voltage
+
+Recognition
+
+(UINT 1 6) (mV)
+Maximum Differential Pressure
+
+and alarm
+
+(UIN T 16) (mV)
+
+0x04
+
+6
+
+(UINT16) (10mV)
+
+Minimum Single
+
+monomer
+
+5
+The total voltage
+
+(INT16) ( ℃)
+
+Number
+
+0x01
+
+4
+
+(UINT1 6 ) (MV)
+
+Quantity
+
+Equalizing currents
+
+(UINT1 6 ) (MA)
+
+The maximum equalizing current
+
+balanced
+
+Number of monomer
+
+(UINT 16) (mA)
+
+switch
+
+the amount
+
+Cell voltage N
+(UINT16) (mV)
+
+-
+
+Cell voltage N + 1
+
+Cell voltage N + 2
+
+(UINT16) (mV)
+
+(UINT16) (mV)
+
+Note 1. Balanced and alarm bytes BIT0 It represents a balanced battery; BIT1 It represents a balancing battery discharge; BIT4
+It represents the number of monomer is not set correctly; BIT5 It represents a line resistance is too large. Note 2. Identifying a number of
+monomers equalizer actually recognized number string, the number of work string monomers equalizer settings
+
+number. Note 3. Number monomer N Cell voltage for a frame number.
+
+4.2 String set number of monomer
+
+1) The host sends data
+Data Field
+
+Addr
+
+1
+
+0x01
+
+0xF0
+
+2
+
+3-8
+-
+
+The number of monomers
+
+2) EQ response
+Data Field
+
+Addr
+
+1
+
+0x01
+
+0xF1
+
+2
+
+3-8
+-
+
+The number of monomers
+
+Note 1. The amount of monomer ranges 2-24 , Beyond the scope of the equalizer will not be recognized, and returns the current equalizer
+
+Internal parameters.
+4.3 Set trigger pressure equalization
+
+1) The host sends data
+Data Field
+
+Addr
+
+1
+0xF2
+
+0x01
+
+2
+
+3
+
+Balance trigger pressure ( UINT16) (mV)
+
+4-8
+-
+
+2) EQ response
+Addr
+0x01
+
+Data Field
+
+1
+0xF3
+
+2
+
+3
+
+Balance trigger pressure ( UINT16) (mV)
+
+Note 1. Balance trigger pressure range 2-1000mV Out of range equalizer will not be recognized, and returns when
+Within the parameters before the equalizer.
+
+4-8
+-
+
+4.4 Set the maximum equalizing current
+
+1) The host sends data
+Data Field
+
+Addr
+
+1
+0xF4
+
+0x01
+
+2
+
+3
+
+4-8
+-
+
+The maximum equalizing current ( UINT16) (mA)
+
+2) EQ response
+Data Field
+
+Addr
+
+1
+0xF5
+
+0x01
+
+2
+
+3
+
+4-8
+-
+
+The maximum equalizing current ( UINT16) (mA)
+
+Note 1. The maximum equalizing current range 30-1000mA Out of range equalizer will not be recognized, and returns when
+Within the parameters before the equalizer.
+
+4.5 Setting the balancing switch
+
+1) The host sends data
+Data Field
+
+Addr
+0x01
+
+1
+
+2
+
+3-8
+
+0xF6
+
+Balancing switch
+
+-
+
+2) EQ response
+Data Field
+
+Addr
+0x01
+
+1
+
+2
+
+3-8
+
+0xF7
+
+Balancing switch
+
+-
+
+Note 1. Balancing switch set to range 0-1,0 Close balanced representation; 1 Indicate on balanced; are out of range
+Instrument will not be recognized, and returns the internal parameters of the current equalizer.
+
+5. For example
+
+5.1 Equalizer data request
+
+Host sends: frame ID 01 ;data 0xFF ;
+EQ response ID : 01 ;
+Response data: 01 00 15 1E D3 0F 69 14 ;//temperature 0x0015 * 1 ℃ = twenty one ℃
+
+// The total voltage 0x1ED3 * 10mV = 7891 * 10mV = 78.910V
+// The average voltage 0x0F69 * 1mV = 3995mV = 3.995V
+// Identification number of monomers 0x14 * 1 String = 20 string
+
+Response data: 0,213,020,000,050,000 ; // maximum voltage cells 0x13 = The first 19 string
+// Low-voltage cells 0x02 = The first 2 string
+
+// Balanced and alarm ( 0x00 & BIT0) = 0 No equalization charge
+// Balanced and alarm ( 0x00 & BIT1) = 0 No balancing discharge
+
+// Balanced and alarm ( 0x00 & BIT4) = 0 Set the correct number of monomers
+
+// Balanced and alarm ( 0x00 & BIT5) = 0 Normal line resistance
+// Maximum Differential Pressure 0x0005 * 1mV = 5mV = 0.005V
+
+// Equalizing currents 0x0000 * 1mA = 0mA = 0A
+
+Response data: 03 03 E8 01 FF 00 14 ; // trigger pressure equalization 0x03E8 * 1mV = 1000mV = 1V
+// The maximum equalizing current 0x01FF * 1mA = 511mA = 0.511A
+// Balancing switch 0x00 Close balanced
+
+// Set the number of monomer 0x14 * 1 String = 20 string
+
+Response data: 04 00 0F 69 0F 69 0F 67 ; // start voltage Number 0x00 = 0
+
+// monomer 0 Voltage 0x0F69 * 1mV = 3945mV = 3.945V
+// monomer 1 Voltage 0x0F69 * 1mV = 3945mV = 3.945V
+// monomer 2 Voltage 0x0F67 * 1mV = 3943mV = 3.943V
+Response data: 04 03 0F 69 0F 68 0F 67 ; // start voltage Number 0x03 = 3
+
+// monomer 3 Voltage 0x0F69 * 1mV = 3945mV = 3.945V
+// monomer 4 Voltage 0x0F68 * 1mV = 3944mV = 3.944V
+// monomer 5 Voltage 0x0F67 * 1mV = 3943mV = 3.943V
+Response data: 04 06 0F 68 0F 68 0F 6C ; // start voltage Number 0x06 = 6
+
+// monomer 6 Voltage 0x0F68 * 1mV = 3944mV = 3.944V
+// monomer 7 Voltage 0x0F68 * 1mV = 3944mV = 3.944V
+
+// monomer 8 Voltage 0x0F6C * 1mV = 3948mV = 3.948V
+
+5.2 Set the number of monomers
+
+Host sends: frame ID 01 ;
+data 0xF0 0x10 ; // set number of monomers 16 string
+
+EQ response ID : 01 ;
+Response data: F1 10 ; // number of monomers 0x10 = 16 String, the transmission data is consistent with the received data, the setting is successful
+
+Host sends: frame ID 01 ;
+data 0xF0 0x20 ; // set number of monomers 32 string (Out of range)
+
+EQ response ID : 01 ;
+Response data: F1 10 ; // number of monomers 0x10 = 16 string, Transmission data and reception data inconsistency, setting failed
+
+5.3 Set trigger pressure equalization
+
+Host sends: frame ID 01 ;
+data F2 00 FF ; // set the trigger pressure equalization 0x00FF * 1mV = 255mV
+
+EQ response ID : 01 ;
+Response data: F3 00 FF ; // trigger pressure equalization 0x00FF * 1mV = 255mV ; Transmission data coincides with the received data,
+Setting Success
+
+Host sends: frame ID 01 ;
+data F2 FF FF ; // set the trigger pressure equalization 0xFFFF * 1mV = 65535mV ( Out of range)
+
+EQ response ID : 01 ;
+
+Response data: F2 00 FF ; // trigger pressure equalization 0x00FF * 1mV = 255mV ; Data transmission and reception of different data
+Induced, setting failed
+
+5.4 Set the maximum equalizing current
+
+Host sends: frame ID 01 ;
+data F4 01 FF ; // set the maximum equalizing current trigger 0x01FF * 1mA = 511mA = 0.511A
+
+EQ response ID : 01 ;
+Response data: F5 01 FF ; // set the maximum equalizing current trigger 0x01FF * 1mA = 511mA = 0.511A ;send data
+And receive data consistency, setting success
+
+Host sends: frame ID 01 ;
+data F4 01 00 ; // set the trigger pressure equalization 0x0100 * 1mV = 256mA ( Out of range)
+
+EQ response ID : 01 ;
+Response data: F5 01 FF ; // set the maximum equalizing current trigger 0x01FF * 1mA = 511mA = 0.511A ; send data
+Inconsistent with the received data set failed
+
+5.5 Setting the balancing switch
+
+Host sends: frame ID 01 ;
+data F6 00 ; // 0x00 Close balanced
+
+EQ response ID : 01 ;
+Response data: F7 00 ; // 0x00 Equilibrium is closed, the transmission data and reception data is consistent, the setting is successful
+
+Host sends: frame ID 01 ;
+data F6 01 ; // 0x00 Open equalization
+
+EQ response ID : 01 ;
+Response data: F7 01 ; // 0x01 Balanced open, consistent data to send and receive data, setting success
+
+Host sends: frame ID 01 ;
+
+data F4 02 ; // Data out of range
+EQ response ID : 01 ;
+Response data: F7 01 ; // balanced open; Transmission data and reception data inconsistency, setting failed
+
+
