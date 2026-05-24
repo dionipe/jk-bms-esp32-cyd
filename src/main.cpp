@@ -67,6 +67,10 @@ static const uint8_t CMD_DEV_INFO[20] = {   // 0x97 = device info, chk = 0x11
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x11
 };
+// ANT BMS status request: 7E A1 01 00 00 BE [CRC_LO CRC_HI] AA 55
+// CRC-16/Modbus over bytes [1..5] = A1 01 00 00 BE → 0x5518
+static const uint8_t CMD_ANT_STATUS[10] = {
+    0x7E,0xA1,0x01,0x00,0x00,0xBE,0x18,0x55,0xAA,0x55};
 
 static const uint8_t LEGACY_PROBE_COMMANDS[] = {0x95, 0x98};
 
@@ -149,6 +153,7 @@ XPT2046_Touchscreen touch(TOUCH_CS, TOUCH_IRQ);
 BMSData bms;
 
 // BLE
+enum BMSType  { BMS_JK = 0, BMS_ANT = 1 };
 enum BLEState { BLE_IDLE, BLE_SCANNING, BLE_SELECT, BLE_CONNECTING, BLE_CONNECTED };
 volatile BLEState bleState  = BLE_IDLE;
 NimBLEClient*                  pClient      = nullptr;
@@ -164,6 +169,7 @@ struct ScanDevice {
     NimBLEAddress bleAddr;
     char name[20];
     char addr[18];
+    BMSType bmsType;
 };
 ScanDevice    scanDevices[MAX_SCAN_DEVICES];
 uint8_t       scanDeviceCount  = 0;
@@ -171,6 +177,8 @@ NimBLEAddress selectedBLEAddr;
 bool          scanStarted      = false;
 uint32_t      lastScanRestartMs = 0;
 bool          bmsScreenReady   = false;  // sudah full-redraw setelah data pertama
+BMSType       connectedBmsType  = BMS_JK;
+BMSType       selectedDeviceType = BMS_JK;
 
 // Buffer penerimaan BLE (multi-packet)
 uint8_t  rxBuf[640];
@@ -822,6 +830,100 @@ bool parseOldProtoFrame(const uint8_t* buf, uint16_t len) {
 }
 
 // ============================================================
+// ANT BMS: CRC-16/MODBUS helper (poly 0xA001, init 0xFFFF)
+// ============================================================
+static uint16_t crc16Ant(const uint8_t* data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i];
+        for (int j = 0; j < 8; j++)
+            crc = (crc & 1) ? (crc >> 1) ^ 0xA001u : (crc >> 1);
+    }
+    return crc;
+}
+
+// ============================================================
+// ANT BMS: Parse status frame (7E A1 11 ...)
+// Ref: https://github.com/syssi/esphome-ant-bms (ant_bms_ble component)
+// ============================================================
+bool parseAntBmsFrame(const uint8_t* buf, uint16_t len) {
+    if (len < 10) return false;
+    if (buf[0] != 0x7E || buf[1] != 0xA1) return false;
+    if (buf[2] != 0x11) return false;  // status response only
+    uint16_t data_len  = buf[5];
+    uint16_t total_len = (uint16_t)(data_len + 10);
+    if (len < total_len) return false;
+
+    // CRC-16/Modbus over buf[1..total_len-5]
+    uint16_t crc_calc = crc16Ant(buf + 1, total_len - 5);
+    uint16_t crc_recv = (uint16_t)buf[total_len-4] | ((uint16_t)buf[total_len-3] << 8);
+    if (crc_calc != crc_recv) {
+        Serial.printf("[ANT] CRC fail calc=%04X recv=%04X\n", crc_calc, crc_recv);
+        return false;
+    }
+
+    auto g16  = [&](uint16_t i) -> uint16_t {
+        return (uint16_t)buf[i] | ((uint16_t)buf[i+1] << 8);
+    };
+    auto g32  = [&](uint16_t i) -> uint32_t {
+        return (uint32_t)buf[i]            | ((uint32_t)buf[i+1] << 8) |
+               ((uint32_t)buf[i+2] << 16) | ((uint32_t)buf[i+3] << 24);
+    };
+    auto gi16 = [&](uint16_t i) -> int16_t { return (int16_t)g16(i); };
+
+    uint8_t temp_sensors = buf[8]; if (temp_sensors > 6) temp_sensors = 6;
+    uint8_t cells        = buf[9];
+    if (cells == 0 || cells > 24) return false;
+
+    uint16_t off2 = (uint16_t)(cells * 2 + temp_sensors * 2);
+    if ((uint32_t)(34 + off2 + 58) > total_len) return false;
+
+    BMSData d = {};
+    strncpy(d.bms_name, "ANT BMS", sizeof(d.bms_name) - 1);
+    d.num_cells = cells;
+
+    // Voltase sel: buf[34 + i*2], LE uint16, unit mV
+    for (uint8_t i = 0; i < cells; i++)
+        d.cell_mv[i] = g16(34 + i * 2);
+
+    // Sensor suhu
+    uint16_t tmp_base = (uint16_t)(34 + cells * 2);
+    if (temp_sensors >= 1) {
+        d.temp_bat1       = (float)gi16(tmp_base);
+        d.temp_bat1_valid = (d.temp_bat1 > -50.0f && d.temp_bat1 < 120.0f);
+    }
+    if (temp_sensors >= 2) {
+        d.temp_bat2       = (float)gi16(tmp_base + 2);
+        d.temp_bat2_valid = (d.temp_bat2 > -50.0f && d.temp_bat2 < 120.0f);
+    }
+    d.temp_mos  = (float)gi16(34 + off2);
+    d.total_v   = (float)g16(38 + off2) * 0.01f;
+    d.current_a = (float)gi16(40 + off2) * 0.1f;
+    d.soc       = (uint8_t)(g16(42 + off2) & 0xFF);
+    if (d.soc > 100) d.soc = 100;
+
+    d.charging    = (buf[46 + off2] == 0x01);
+    d.discharging = (buf[47 + off2] == 0x01);
+    d.balancing   = (buf[48 + off2] == 0x04);
+
+    d.cap_ah    = (float)g32(50 + off2) * 0.000001f;
+    d.remain_ah = (float)g32(54 + off2) * 0.000001f;
+
+    if (d.current_a > -0.05f && d.current_a < 0.05f) {
+        d.current_a = 0.0f; d.charging = false; d.discharging = false;
+    }
+
+    d.valid       = (d.num_cells > 0 && d.total_v > 0.5f);
+    d.last_update = millis();
+    if (d.valid) {
+        bms = d;
+        Serial.printf("[ANT] Sel=%d SOC=%d%% V=%.2fV I=%.2fA Tmos=%.1f\n",
+                      bms.num_cells, bms.soc, bms.total_v, bms.current_a, bms.temp_mos);
+    }
+    return d.valid;
+}
+
+// ============================================================
 // Proses buffer penerimaan BLE
 // ============================================================
 // Cek apakah buffer berisi teks ASCII murni (protokol AT)
@@ -833,6 +935,27 @@ static bool isAllPrintable(const uint8_t* buf, uint16_t len) {
 
 void processRxBuffer() {
     if (rxLen == 0) return;
+
+    // ── ANT BMS: 7E A1 frame assembler ──────────────────────────────────────
+    if (connectedBmsType == BMS_ANT) {
+        int startIdx = -1;
+        for (int i = 0; i < (int)rxLen - 1; i++) {
+            if (rxBuf[i] == 0x7E && rxBuf[i+1] == 0xA1) { startIdx = i; break; }
+        }
+        if (startIdx < 0) { rxLen = 0; return; }
+        if (startIdx > 0) { memmove(rxBuf, rxBuf+startIdx, rxLen-startIdx); rxLen -= (uint16_t)startIdx; }
+        if (rxLen < 6) return;
+        uint16_t data_len  = rxBuf[5];
+        uint16_t total_len = (uint16_t)(data_len + 10);
+        if (total_len > sizeof(rxBuf)) { rxLen = 0; return; }
+        if (rxLen < total_len) return;
+        bool ok = parseAntBmsFrame(rxBuf, total_len);
+        if (rxLen > total_len) { memmove(rxBuf, rxBuf+total_len, rxLen-total_len); rxLen -= total_len; }
+        else rxLen = 0;
+        if (ok) { newDataReady = true; lastFrameMs = millis(); }
+        if (rxLen >= 6) processRxBuffer();
+        return;
+    }
 
     auto logLegacyRs485Frame = [&](const uint8_t* frame, uint16_t len) {
         if (len < 5) return;
@@ -984,6 +1107,7 @@ class JKClientCallbacks : public NimBLEClientCallbacks {
         pJKCharLegacy  = nullptr;
         pJKCharLegacyAlt = nullptr;
         pJKCharLegacyExtra = nullptr;
+        connectedBmsType = BMS_JK;
         bmsScreenReady = false;
         Serial.println("[BLE] Terputus");
         // Jika daftar device masih ada, kembali ke layar pilih
@@ -1018,6 +1142,9 @@ static void notifyCallback(NimBLERemoteCharacteristic* c,
         Serial.print("\"]");
     }
     Serial.println();
+    // ANT BMS: flush buffer on every 7E A1 preamble to prevent frame corruption
+    if (connectedBmsType == BMS_ANT && length >= 2 && pData[0] == 0x7E && pData[1] == 0xA1)
+        rxLen = 0;
     if (rxLen + length >= sizeof(rxBuf)) {
         Serial.println("[NOTIFY] Buffer penuh, reset");
         rxLen = 0;
@@ -1234,12 +1361,13 @@ static void sendLegacyInitProbe() {
 class JKScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice* dev) override {
         std::string name = dev->getName();
-        bool isJK = (name.find("JK") != std::string::npos);
+        bool isANT = (name.find("ANT") != std::string::npos || name.find("ant") != std::string::npos);
+        bool isJK  = (name.find("JK")  != std::string::npos);
         // Fallback: cek service UUID FFE0
-        if (!isJK && dev->haveServiceUUID()) {
+        if (!isJK && !isANT && dev->haveServiceUUID()) {
             isJK = dev->isAdvertisingService(NimBLEUUID(JK_SERVICE_UUID));
         }
-        if (!isJK) return;
+        if (!isJK && !isANT) return;
 
         NimBLEAddress devAddr = dev->getAddress();
         std::string   addrStr = devAddr.toString();
@@ -1252,9 +1380,12 @@ class JKScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
             return;
         }
         // Simpan perangkat baru
-        scanDevices[scanDeviceCount].bleAddr = devAddr;
+        BMSType     dtype   = isANT ? BMS_ANT : BMS_JK;
+        const char* defName = isANT ? "ANT BMS" : "JK BMS";
+        scanDevices[scanDeviceCount].bleAddr  = devAddr;
+        scanDevices[scanDeviceCount].bmsType  = dtype;
         strncpy(scanDevices[scanDeviceCount].name,
-                name.empty() ? "JK BMS" : name.c_str(), 19);
+                name.empty() ? defName : name.c_str(), 19);
         scanDevices[scanDeviceCount].name[19] = '\0';
         strncpy(scanDevices[scanDeviceCount].addr, addrStr.c_str(), 17);
         scanDevices[scanDeviceCount].addr[17] = '\0';
@@ -1404,34 +1535,51 @@ bool connectToBMS() {
         subscribeNotifyIfSupported(pJKCharLegacyExtra, "FF10 secondary");
     }
 
-    delay(1000);
+    // Set tipe BMS sebelum subscribe agar callback routing sudah benar
+    connectedBmsType = selectedDeviceType;
 
-    // Reset AT mode recovery state
-    atRxCount    = 0;
-    atEscapeSent = false;
-    lastNotifyMs = 0;
-    lastFrameMs  = 0;
-    noDataRetryCount = 0;
-    legacyAckSeen = false;
-    legacyProbeIndex = 0;
-    legacyFormatProbeIndex = 0;
-    legacyFamilyProbeIndex = 0;
-    legacyShortProbeIndex = 0;
-    legacyJkSequence = 1;
+    if (connectedBmsType == BMS_ANT) {
+        // ANT BMS: write & notify via FFE1; tidak perlu legacy service
+        pJKChar    = notifyChar;
+        pJKCharAlt = notifyChar;
+        pJKCharLegacy = nullptr; pJKCharLegacyAlt = nullptr; pJKCharLegacyExtra = nullptr;
+        subscribeNotifyIfSupported(notifyChar, "ANT FFE1");
+        delay(500);
+        rxLen = 0; atRxCount = 0; atEscapeSent = false;
+        lastNotifyMs = 0; lastFrameMs = 0; noDataRetryCount = 0;
+        legacyAckSeen = false;
+        notifyChar->writeValue((uint8_t*)CMD_ANT_STATUS, sizeof(CMD_ANT_STATUS), false);
+        Serial.println("[ANT] Terhubung, permintaan status dikirim");
+    } else {
+        delay(1000);
 
-    // Kirim CMD_DEV_INFO untuk mendapat info perangkat (type 0x03)
-    Serial.println("[BLE] Init: CMD_DEV_INFO -> FFE2 (chk=0x11)");
-    pJKChar->writeValue((uint8_t*)CMD_DEV_INFO, sizeof(CMD_DEV_INFO), false);
-    delay(800);
+        // Reset AT mode recovery state
+        atRxCount    = 0;
+        atEscapeSent = false;
+        lastNotifyMs = 0;
+        lastFrameMs  = 0;
+        noDataRetryCount = 0;
+        legacyAckSeen = false;
+        legacyProbeIndex = 0;
+        legacyFormatProbeIndex = 0;
+        legacyFamilyProbeIndex = 0;
+        legacyShortProbeIndex = 0;
+        legacyJkSequence = 1;
 
-    // Kirim CMD_CELL_INFO untuk mendapat settings (type 0x01) + cell info (type 0x02)
-    Serial.println("[BLE] Init: CMD_CELL_INFO -> FFE2 (chk=0x10)");
-    pJKChar->writeValue((uint8_t*)CMD_CELL_INFO, sizeof(CMD_CELL_INFO), false);
-    delay(800);
+        // Kirim CMD_DEV_INFO untuk mendapat info perangkat (type 0x03)
+        Serial.println("[BLE] Init: CMD_DEV_INFO -> FFE2 (chk=0x11)");
+        pJKChar->writeValue((uint8_t*)CMD_DEV_INFO, sizeof(CMD_DEV_INFO), false);
+        delay(800);
 
-    if (pJKCharLegacy || pJKCharLegacyAlt || pJKCharLegacyExtra) {
-        Serial.println("[BLE] Init tambahan via FF10 probe...");
-        sendLegacyInitProbe();
+        // Kirim CMD_CELL_INFO untuk mendapat settings (type 0x01) + cell info (type 0x02)
+        Serial.println("[BLE] Init: CMD_CELL_INFO -> FFE2 (chk=0x10)");
+        pJKChar->writeValue((uint8_t*)CMD_CELL_INFO, sizeof(CMD_CELL_INFO), false);
+        delay(800);
+
+        if (pJKCharLegacy || pJKCharLegacyAlt || pJKCharLegacyExtra) {
+            Serial.println("[BLE] Init tambahan via FF10 probe...");
+            sendLegacyInitProbe();
+        }
     }
 
     Serial.println("[BLE] Init selesai, loop poll setiap 5s");
@@ -1551,9 +1699,9 @@ void drawScanScreen(const char* msg) {
         tft.setCursor(42, 158);
         tft.print("Menghubungkan");
     } else {
-        // "Mencari BMS JK" 14 × 12px = 168px → x = 36
-        tft.setCursor(36, 158);
-        tft.print("Mencari BMS JK");
+        // "Cari BMS JK/ANT" 15 × 12px = 180px → x = 30
+        tft.setCursor(30, 158);
+        tft.print("Cari BMS JK/ANT");
     }
 
     // ── Pesan status ─────────────────────────────────────────
@@ -1570,12 +1718,12 @@ void drawScanScreen(const char* msg) {
         tft.drawRoundRect(10, 193, 220, 80, 6, DIM);
         tft.setTextColor(tft.color565(90, 160, 180));
         tft.setTextSize(1);
-        tft.setCursor(22, 202); tft.print("Pastikan BMS JK menyala");
+        tft.setCursor(22, 202); tft.print("Pastikan BMS menyala");
         tft.setCursor(22, 216); tft.print("dan Bluetooth BMS aktif.");
         tft.setTextColor(tft.color565(55, 105, 130));
-        tft.setCursor(22, 231); tft.print("Nama diawali  \"JK\"");
+        tft.setCursor(22, 231); tft.print("Nama: \"JK...\" atau \"ANT...\"");
         tft.setTextColor(tft.color565(75, 145, 170));
-        tft.setCursor(22, 246); tft.print("Contoh: JK_B2A24S, JK-B1A8S");
+        tft.setCursor(22, 246); tft.print("Contoh: JK_B2A24S, ANT BMS");
     }
 }
 
@@ -1625,7 +1773,7 @@ void drawSelectScreen() {
         tft.print("?");
         tft.setTextColor(tft.color565(55, 100, 125));
         tft.setTextSize(1);
-        tft.setCursor(30, 205); tft.print("Belum ada perangkat JK BMS.");
+        tft.setCursor(22, 205); tft.print("Belum ada perangkat JK/ANT.");
         tft.setCursor(42, 221); tft.print("Tekan SCAN ULANG di bawah.");
     } else {
         // ── Daftar perangkat (y=54+i*46, touch-zone 42px) ────
@@ -2478,7 +2626,7 @@ void loop() {
     if (needFullRedraw) {
         needFullRedraw = false;
         if (bleState == BLE_SCANNING) {
-            drawScanScreen("Mencari JK BMS via BLE...");
+            drawScanScreen("Mencari JK/ANT BMS via BLE...");
         } else if (bleState == BLE_SELECT) {
             drawSelectScreen();
         } else if (bleState == BLE_CONNECTED || bms.valid) {
@@ -2509,7 +2657,9 @@ void loop() {
     // ---- Kirim request data ke BMS setiap 5 detik ----
     if (bleState == BLE_CONNECTED && now - lastRequestMs >= 5000) {
         lastRequestMs = now;
-        if (legacyAckSeen && (pJKCharLegacy || pJKCharLegacyAlt || pJKCharLegacyExtra)) {
+        if (connectedBmsType == BMS_ANT) {
+            if (pJKChar) pJKChar->writeValue((uint8_t*)CMD_ANT_STATUS, sizeof(CMD_ANT_STATUS), false);
+        } else if (legacyAckSeen && (pJKCharLegacy || pJKCharLegacyAlt || pJKCharLegacyExtra)) {
             sendLegacyCellInfoPoll();
             if (lastFrameMs == 0) {
                 sendLegacyAltProbe();
@@ -2520,8 +2670,8 @@ void loop() {
         }
     }
 
-    // ---- Recovery untuk BMS yang connect tapi tidak pernah mengirim notify ----
-    if (bleState == BLE_CONNECTED && pJKChar && pJKCharAlt &&
+    // ---- Recovery untuk BMS yang connect tapi tidak pernah mengirim notify (JK only) ----
+    if (bleState == BLE_CONNECTED && connectedBmsType == BMS_JK && pJKChar && pJKCharAlt &&
         lastFrameMs == 0 && noDataRetryCount < 3 &&
         now > 6000 && now - lastRequestMs > 2500) {
         noDataRetryCount++;
@@ -2539,8 +2689,8 @@ void loop() {
         }
     }
 
-    // ---- Deteksi BMS stuck AT mode: coba AT+EXIT lalu retry via FFE1 ----
-    if (bleState == BLE_CONNECTED && pJKChar &&
+    // ---- Deteksi BMS stuck AT mode: coba AT+EXIT lalu retry via FFE1 (JK only) ----
+    if (bleState == BLE_CONNECTED && connectedBmsType == BMS_JK && pJKChar &&
         atRxCount >= 8 && !atEscapeSent &&
         now - lastAtEscapeMs > 5000) {
         lastAtEscapeMs = now;
@@ -2584,10 +2734,12 @@ void loop() {
                 for (int i = 0; i < scanDeviceCount; i++) {
                     int itemY = 54 + i * 46;
                     if (ty >= itemY && ty < itemY + 42) {
-                        selectedBLEAddr = scanDevices[i].bleAddr;
-                        bleState        = BLE_CONNECTING;
-                        needFullRedraw  = true;
-                        Serial.printf("[TOUCH] Pilih: %s\n", scanDevices[i].name);
+                        selectedBLEAddr    = scanDevices[i].bleAddr;
+                        selectedDeviceType = scanDevices[i].bmsType;
+                        bleState           = BLE_CONNECTING;
+                        needFullRedraw     = true;
+                        Serial.printf("[TOUCH] Pilih: %s (%s)\n", scanDevices[i].name,
+                                      scanDevices[i].bmsType == BMS_ANT ? "ANT" : "JK");
                         break;
                     }
                 }

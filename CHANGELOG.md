@@ -4,6 +4,31 @@ Semua perubahan penting pada proyek ini dicatat di file ini.
 
 ---
 
+## [v1.3.0] — 2026-05-24
+
+### Added
+- **Dukungan ANT BMS** via BLE — deteksi otomatis dari nama perangkat (`"ANT"` / `"ant"`)
+- Parsing frame `7E A1 11` (ANT BMS status response) dengan validasi **CRC-16/Modbus**
+- `crc16Ant()` — helper CRC-16/Modbus (poly 0xA001, init 0xFFFF)
+- `parseAntBmsFrame()` — dekode voltase sel, suhu sensor, suhu MOS, voltase total, arus, SOC, kapasitas, status charging/discharging/balancing
+- `enum BMSType { BMS_JK, BMS_ANT }` — routing protokol terpisah untuk JK dan ANT
+- Field `BMSType bmsType` pada `ScanDevice` — daftar scan menampung perangkat JK dan ANT sekaligus
+- Global `connectedBmsType` dan `selectedDeviceType` untuk routing callback dan poll loop
+- ANT BMS connect branch di `connectToBMS()`: subscribe `FFE1` untuk write sekaligus notify, kirim `CMD_ANT_STATUS` saat terhubung
+- ANT BMS periodic poll — kirim `CMD_ANT_STATUS` setiap 5 detik
+- ANT preamble buffer flush di `notifyCallback()` — reset buffer setiap ada preamble `7E A1` untuk mencegah korupsi frame akibat fragmentasi BLE
+- Guard `connectedBmsType == BMS_JK` pada no-data recovery dan AT-mode recovery agar tidak mengganggu ANT BMS
+
+### Changed
+- Layar scan: judul berubah dari **"Mencari BMS JK"** → **"Cari BMS JK/ANT"**
+- Info card scan: nama panduan diperbarui dari `"Nama diawali \"JK\""` → `"Nama: \"JK...\" atau \"ANT...\""`, contoh dari `JK_B2A24S, JK-B1A8S` → `JK_B2A24S, ANT BMS`
+- Info card scan: teks `"Pastikan BMS JK menyala"` → `"Pastikan BMS menyala"` (generik)
+- Layar pilih perangkat kosong: `"Belum ada perangkat JK BMS."` → `"Belum ada perangkat JK/ANT."`
+- Loop scan text: `"Mencari JK BMS via BLE..."` → `"Mencari JK/ANT BMS via BLE..."`
+- Touch handler: `selectedDeviceType` di-set dari `scanDevices[i].bmsType` saat pengguna memilih perangkat
+
+---
+
 ## [v1.2.1]
 
 ### Added
