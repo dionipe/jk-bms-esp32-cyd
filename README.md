@@ -14,6 +14,7 @@ Monitor baterai **JK BMS** dan **ANT BMS** via Bluetooth Low Energy (BLE), ditam
 - **Dukungan dua protokol JK BMS**:
   - Protokol baru TLV `4E57` (JK02 standar BLE)
   - Protokol lama fixed-frame `55AAEB90` (JK01 / variant firmware)
+- **Dukungan legacy RS485 bridge (`EB90`)** untuk balancer JK yang merespons ACK pendek `FC xx 06`
 - **Dukungan ANT BMS** via protokol `7E A1` (CRC-16/Modbus) — voltase sel, arus, SOC, suhu, kapasitas, status charging/discharging/balancing
 - **Auto-deteksi offset** data resistansi antar varian firmware
 - **LED RGB** indikator status koneksi
@@ -59,6 +60,17 @@ Monitor baterai **JK BMS** dan **ANT BMS** via Bluetooth Low Energy (BLE), ditam
 - Frame type `0x02`: data sel (voltase + resistansi internal per sel)
 - Resistansi sel: offset auto-detected, unit mΩ (nilai raw = mΩ langsung)
 - Data tambahan: suhu, arus, SOC, kapasitas, alarm
+
+### JK Legacy RS485 Bridge — `55AA ..` request / `EB90 ..` response
+- Request host: `55 AA <addr> FF 00 00 <checksum>`
+- Response slave: `EB 90 <addr> FF ...` dengan panjang tetap 74 byte
+- ACK pendek legacy `FC xx 06` dideteksi sebagai sinyal valid; firmware akan memicu poll lanjutan otomatis
+- Probe alamat legacy mencakup `0x81`, `0x00`, `0x01`, `0x02`, `0x10` untuk kompatibilitas varian modul BLE-RS485
+- Parser `EB90` mengekstrak voltase total, jumlah sel, voltase per-sel, flag balancing, dan alarm
+
+Catatan checksum request RS485:
+- checksum dihitung sebagai penjumlahan byte `55 AA <addr> FF 00 00` (mod 256)
+- contoh untuk alamat `0x81`: request valid adalah `55 AA 81 FF 00 00 7F`
 
 ### ANT BMS — Protokol `7E A1`
 - BLE Service UUID: `0000ffe0-0000-1000-8000-00805f9b34fb`

@@ -4,6 +4,23 @@ Semua perubahan penting pada proyek ini dicatat di file ini.
 
 ---
 
+## [v1.3.1] — 2026-05-27
+
+### Added
+- Parser `parseLegacyRs485Frame()` untuk frame upload legacy RS485 `EB 90` (74 byte) dengan validasi checksum
+- Dukungan parse data RS485 ke `BMSData`: voltase total, jumlah sel, voltase per-sel, flag balancing, alarm
+- Probe alamat legacy tambahan `0x81` pada daftar short-probe (`55 AA <addr> FF 00 00 <chk>`)
+
+### Changed
+- Deteksi ACK pendek legacy `FC xx 06` dibuat lebih robust (tidak harus buffer persis 3 byte)
+- Saat ACK legacy diterima, scheduler request dipercepat agar polling data berikutnya langsung jalan
+- Polling periodik koneksi BLE diselaraskan memakai konstanta `REQUEST_INTERVAL_MS` (2 detik)
+
+### Fixed
+- Kasus perangkat legacy yang sebelumnya hanya mengirim ACK pendek tanpa data kini dapat lanjut ke poll kompatibel RS485
+
+---
+
 ## [v1.3.0] — 2026-05-24
 
 ### Added

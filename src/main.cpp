@@ -107,6 +107,7 @@ struct LegacyShortProbe {
 };
 
 static const LegacyShortProbe LEGACY_SHORT_PROBES[] = {
+    {0x81, 0xFF, 0x0000, "RS485-ALLDATA-A129"},
     {0x00, 0xFF, 0x0000, "RS485-ALLDATA-A0"},
     {0x01, 0xFF, 0x0000, "RS485-ALLDATA-A1"},
     {0x02, 0xFF, 0x0000, "RS485-ALLDATA-A2"},
@@ -843,6 +844,66 @@ static uint16_t crc16Ant(const uint8_t* data, size_t len) {
 }
 
 // ============================================================
+// JK Legacy RS485: Parse upload frame (EB 90 ...), fixed 74 bytes
+// Ref request: 55 AA <addr> FF 00 00 <checksum>
+// ============================================================
+static bool parseLegacyRs485Frame(const uint8_t* buf, uint16_t len) {
+    if (len < 74) return false;
+    if (buf[0] != 0xEB || buf[1] != 0x90) return false;
+
+    uint8_t crc = 0;
+    for (int i = 0; i < 73; i++) crc = (uint8_t)(crc + buf[i]);
+    if (crc != buf[73]) {
+        Serial.printf("[RS485] CRC FAIL calc=%02X recv=%02X\n", crc, buf[73]);
+        return false;
+    }
+
+    auto be16 = [&](int i) -> uint16_t {
+        return ((uint16_t)buf[i] << 8) | buf[i + 1];
+    };
+
+    BMSData d = bms;
+    strncpy(d.bms_name, "JK RS485", sizeof(d.bms_name) - 1);
+    d.bms_name[sizeof(d.bms_name) - 1] = '\0';
+
+    d.total_v = (float)be16(4) * 0.01f;   // unit 10mV
+    uint8_t recognizedCells = buf[8];
+    if (recognizedCells > 24) recognizedCells = 24;
+    d.num_cells = recognizedCells;
+
+    d.balancing   = ((buf[11] & 0x03) != 0);
+    d.alarm_flags = buf[12];
+
+    // Cell voltages start at offset 23, each 2 bytes (big-endian, mV).
+    for (uint8_t i = 0; i < d.num_cells; i++) {
+        int off = 23 + i * 2;
+        if (off + 1 >= 73) break;
+        d.cell_mv[i] = be16(off);
+    }
+
+    if (d.total_v < 0.5f && d.num_cells > 0) {
+        float sum = 0.0f;
+        for (uint8_t i = 0; i < d.num_cells; i++) sum += d.cell_mv[i];
+        d.total_v = sum / 1000.0f;
+    }
+
+    d.current_a = 0.0f;
+    d.charging = false;
+    d.discharging = false;
+    d.valid = (d.num_cells > 0 || d.total_v > 0.5f);
+    d.last_update = millis();
+
+    if (d.valid) {
+        bms = d;
+        Serial.printf("[RS485] addr=%02X cmd=%02X cells=%u V=%.2f Bal=%d Alarm=0x%08X\n",
+                      buf[2], buf[3], bms.num_cells, bms.total_v,
+                      bms.balancing ? 1 : 0, bms.alarm_flags);
+    }
+
+    return d.valid;
+}
+
+// ============================================================
 // ANT BMS: Parse status frame (7E A1 11 ...)
 // Ref: https://github.com/syssi/esphome-ant-bms (ant_bms_ble component)
 // ============================================================
@@ -1012,11 +1073,22 @@ void processRxBuffer() {
         rxLen -= 4;
     }
 
-    if (rxLen == 3 && rxBuf[0] == 0xFC && rxBuf[2] == 0x06) {
+    while (rxLen >= 3 && rxBuf[0] == 0xFC && rxBuf[2] == 0x06) {
         Serial.printf("[RX] ACK pendek legacy: FC %02X 06\n", rxBuf[1]);
         legacyAckSeen = true;
-        rxLen = 0;
-        return;
+        // Force next poll soon, useful for ACK-only notify bridges (e.g. FF12).
+        if (millis() > REQUEST_INTERVAL_MS)
+            lastRequestMs = millis() - REQUEST_INTERVAL_MS;
+        else
+            lastRequestMs = 0;
+
+        if (rxLen > 3) {
+            memmove(rxBuf, rxBuf + 3, rxLen - 3);
+            rxLen -= 3;
+        } else {
+            rxLen = 0;
+            return;
+        }
     }
 
     // Cari header 4E57 atau 55AAEB90
@@ -1047,8 +1119,13 @@ void processRxBuffer() {
         const uint16_t totalLen = 74;
         if (rxLen < totalLen) return;
         logLegacyRs485Frame(rxBuf, totalLen);
+        bool ok = parseLegacyRs485Frame(rxBuf, totalLen);
         if (rxLen > totalLen) { memmove(rxBuf, rxBuf + totalLen, rxLen - totalLen); rxLen -= totalLen; }
         else rxLen = 0;
+        if (ok) {
+            newDataReady = true;
+            lastFrameMs = millis();
+        }
         if (rxLen >= 8) processRxBuffer();
         return;
     }
@@ -2655,7 +2732,7 @@ void loop() {
     }
 
     // ---- Kirim request data ke BMS setiap 5 detik ----
-    if (bleState == BLE_CONNECTED && now - lastRequestMs >= 5000) {
+    if (bleState == BLE_CONNECTED && now - lastRequestMs >= REQUEST_INTERVAL_MS) {
         lastRequestMs = now;
         if (connectedBmsType == BMS_ANT) {
             if (pJKChar) pJKChar->writeValue((uint8_t*)CMD_ANT_STATUS, sizeof(CMD_ANT_STATUS), false);
