@@ -213,6 +213,7 @@ uint8_t  legacyProbeIndex = 0;   // probe opcode alternatif untuk BMS legacy ACK
 uint8_t  legacyFormatProbeIndex = 0; // probe variasi length/value untuk BMS legacy ACK-only
 uint8_t  legacyFamilyProbeIndex = 0; // probe variasi header request untuk BMS legacy ACK-only
 uint8_t  legacyShortProbeIndex = 0; // probe frame pendek gaya RS485 untuk BMS legacy ACK-only
+bool     legacyUseShortNext = true; // ACK-only mode: kirim short probe dulu agar cepat dapat EB90
 uint8_t  legacyJkSequence = 1; // sequence counter untuk frame JK 20-byte yang dibangun dinamis
 
 // ============================================================
@@ -1381,7 +1382,8 @@ static void sendLegacyCellInfoPoll() {
 }
 
 static void sendLegacyAltProbe() {
-    bool useShortProbe = ((legacyShortProbeIndex % 2) == 1);
+    bool useShortProbe = legacyUseShortNext;
+    legacyUseShortNext = !legacyUseShortNext;
 
     uint8_t command = LEGACY_PROBE_COMMANDS[legacyProbeIndex % (sizeof(LEGACY_PROBE_COMMANDS) / sizeof(LEGACY_PROBE_COMMANDS[0]))];
     const LegacyProbeFormat& format = LEGACY_PROBE_FORMATS[legacyFormatProbeIndex % (sizeof(LEGACY_PROBE_FORMATS) / sizeof(LEGACY_PROBE_FORMATS[0]))];
@@ -1394,7 +1396,6 @@ static void sendLegacyAltProbe() {
         legacyProbeIndex++;
         legacyFormatProbeIndex++;
         legacyFamilyProbeIndex++;
-        legacyShortProbeIndex++;
     }
 
     NimBLERemoteCharacteristic* chars[3] = {
@@ -1666,6 +1667,7 @@ bool connectToBMS() {
         legacyFormatProbeIndex = 0;
         legacyFamilyProbeIndex = 0;
         legacyShortProbeIndex = 0;
+        legacyUseShortNext = true;
         legacyJkSequence = 1;
 
         // Kirim CMD_DEV_INFO untuk mendapat info perangkat (type 0x03)
@@ -2762,9 +2764,11 @@ void loop() {
         if (connectedBmsType == BMS_ANT) {
             if (pJKChar) pJKChar->writeValue((uint8_t*)CMD_ANT_STATUS, sizeof(CMD_ANT_STATUS), false);
         } else if (legacyAckSeen && (pJKCharLegacy || pJKCharLegacyAlt || pJKCharLegacyExtra)) {
-            sendLegacyCellInfoPoll();
             if (lastFrameMs == 0) {
+                // ACK-only mode: kirim probe bertahap, hindari flood command.
                 sendLegacyAltProbe();
+            } else {
+                sendLegacyCellInfoPoll();
             }
         } else if (pJKChar) {
             Serial.println("[POLL] CMD_CELL_INFO -> FFE2 (chk=0x10)");
