@@ -13,6 +13,8 @@ Semua perubahan penting pada proyek ini dicatat di file ini.
 
 ### Changed
 - Deteksi ACK pendek legacy `FC xx 06` dibuat lebih robust (tidak harus buffer persis 3 byte)
+- Fast-path ACK di `notifyCallback()` agar ACK bridge (`FF10/FF12`) tetap terbaca valid meski data tercampur
+- Scanner ACK pada `processRxBuffer()` kini mencari pola ACK di seluruh buffer (bukan hanya di awal buffer)
 - Saat ACK legacy diterima, scheduler request dipercepat agar polling data berikutnya langsung jalan
 - Polling periodik koneksi BLE diselaraskan memakai konstanta `REQUEST_INTERVAL_MS` (2 detik)
 

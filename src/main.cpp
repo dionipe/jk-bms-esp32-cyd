@@ -997,6 +997,15 @@ static bool isAllPrintable(const uint8_t* buf, uint16_t len) {
 void processRxBuffer() {
     if (rxLen == 0) return;
 
+    auto markLegacyAckSeen = [&]() {
+        legacyAckSeen = true;
+        // Force next poll soon, useful for ACK-only notify bridges (e.g. FF12).
+        if (millis() > REQUEST_INTERVAL_MS)
+            lastRequestMs = millis() - REQUEST_INTERVAL_MS;
+        else
+            lastRequestMs = 0;
+    };
+
     // ── ANT BMS: 7E A1 frame assembler ──────────────────────────────────────
     if (connectedBmsType == BMS_ANT) {
         int startIdx = -1;
@@ -1073,23 +1082,21 @@ void processRxBuffer() {
         rxLen -= 4;
     }
 
-    while (rxLen >= 3 && rxBuf[0] == 0xFC && rxBuf[2] == 0x06) {
-        Serial.printf("[RX] ACK pendek legacy: FC %02X 06\n", rxBuf[1]);
-        legacyAckSeen = true;
-        // Force next poll soon, useful for ACK-only notify bridges (e.g. FF12).
-        if (millis() > REQUEST_INTERVAL_MS)
-            lastRequestMs = millis() - REQUEST_INTERVAL_MS;
-        else
-            lastRequestMs = 0;
-
-        if (rxLen > 3) {
-            memmove(rxBuf, rxBuf + 3, rxLen - 3);
+    // ACK pendek legacy bisa datang sendiri atau bercampur dengan byte lain.
+    // Tangkap semua pola FC xx 06 di mana pun posisinya dalam buffer.
+    bool ackFound = false;
+    for (int i = 0; i <= (int)rxLen - 3; ) {
+        if (rxBuf[i] == 0xFC && rxBuf[i + 2] == 0x06) {
+            Serial.printf("[RX] ACK pendek legacy: FC %02X 06\n", rxBuf[i + 1]);
+            markLegacyAckSeen();
+            ackFound = true;
+            memmove(rxBuf + i, rxBuf + i + 3, rxLen - (uint16_t)(i + 3));
             rxLen -= 3;
-        } else {
-            rxLen = 0;
-            return;
+            continue;
         }
+        i++;
     }
+    if (ackFound && rxLen == 0) return;
 
     // Cari header 4E57 atau 55AAEB90
     int startIdx = -1;
@@ -1219,6 +1226,24 @@ static void notifyCallback(NimBLERemoteCharacteristic* c,
         Serial.print("\"]");
     }
     Serial.println();
+
+    // Fast-path: ACK pendek legacy FC xx 06 dari bridge FF10/FF12.
+    // Proses langsung di callback agar tidak salah baca saat buffer bercampur data lain.
+    bool sawLegacyAck = false;
+    for (size_t i = 0; i + 2 < length; i++) {
+        if (pData[i] == 0xFC && pData[i + 2] == 0x06) {
+            Serial.printf("[RX] ACK pendek legacy (notify): FC %02X 06\n", pData[i + 1]);
+            legacyAckSeen = true;
+            sawLegacyAck = true;
+        }
+    }
+    if (sawLegacyAck) {
+        if (millis() > REQUEST_INTERVAL_MS)
+            lastRequestMs = millis() - REQUEST_INTERVAL_MS;
+        else
+            lastRequestMs = 0;
+    }
+
     // ANT BMS: flush buffer on every 7E A1 preamble to prevent frame corruption
     if (connectedBmsType == BMS_ANT && length >= 2 && pData[0] == 0x7E && pData[1] == 0xA1)
         rxLen = 0;

@@ -65,6 +65,7 @@ Monitor baterai **JK BMS** dan **ANT BMS** via Bluetooth Low Energy (BLE), ditam
 - Request host: `55 AA <addr> FF 00 00 <checksum>`
 - Response slave: `EB 90 <addr> FF ...` dengan panjang tetap 74 byte
 - ACK pendek legacy `FC xx 06` dideteksi sebagai sinyal valid; firmware akan memicu poll lanjutan otomatis
+- ACK `FC xx 06` diproses di level notify (termasuk karakteristik bridge seperti `FF12`) dan tetap terdeteksi saat fragment/campur paket
 - Probe alamat legacy mencakup `0x81`, `0x00`, `0x01`, `0x02`, `0x10` untuk kompatibilitas varian modul BLE-RS485
 - Parser `EB90` mengekstrak voltase total, jumlah sel, voltase per-sel, flag balancing, dan alarm
 
